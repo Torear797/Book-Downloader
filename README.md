@@ -2,7 +2,7 @@
 
 Swift-based инструмент для загрузки книг из Яндекс.Книги в формате EPUB
 
-![Swift](https://img.shields.io/badge/Swift-5.5+-orange.svg)
+![Swift](https://img.shields.io/badge/Swift-6.0+-orange.svg)
 
 ## Особенности
 
