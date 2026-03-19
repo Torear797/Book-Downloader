@@ -31,8 +31,16 @@ struct DefaultArgumentParser: ArgumentParser {
             throw ArgumentParserError.invalidArguments
         }
         
+        var downloadDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        var outputPath: URL
+        
+        if let downloadDir {
+            outputPath = downloadDir.appending(path: "books")
+        } else {
+            outputPath = URL(fileURLWithPath: "books")
+        }
+        
         var bookID: String?
-        var outputPath: URL = URL(filePath: "out")
         
         for i in 1..<arguments.count {
             let argument = arguments[i]
