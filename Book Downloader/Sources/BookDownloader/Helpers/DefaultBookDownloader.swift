@@ -1,5 +1,5 @@
 //
-//  BookDownloader.swift
+//  DefaultBookDownloader.swift
 //  Book Downloader
 //
 //  Created by Артём Клыч on 18.03.2026.
@@ -8,36 +8,31 @@
 import CommonCrypto
 import Foundation
 
-protocol BookDownloader {
-    func download() throws
+protocol IBookDownloader {
+    func download() async throws
     func deleteDownloaded() throws
     func makeEPUB() throws -> URL
     func deleteCSS() throws
 }
 
-struct DefaultBookDownloader: BookDownloader {
+struct DefaultBookDownloader: IBookDownloader {
     let bookid: String
     let downloader: Downloader
     let secret: String
     let provider: Provider
     
-    init(bookid: String, downloader: Downloader, secret: String? = nil, provider: Provider) throws {
+    init(bookid: String, downloader: Downloader, secret: String, provider: Provider) throws {
         self.bookid = bookid
         self.downloader = downloader
         self.provider = provider
-        
-        if let secret {
-            self.secret = secret
-        } else {
-            self.secret = try Self.downloadSecret(downloader: downloader, provider: provider)
-        }
+        self.secret = secret
     }
 
-    func download() throws {
-        let encryptedMetadata = try downloadMetadata(bookid)
+    func download() async throws {
+        let encryptedMetadata = try await downloadMetadata(bookid)
         let metadata = try decryptMetadata(encryptedMetadata, secret: secret)
         
-        try processMetadata(metadata)
+        try await processMetadata(metadata)
     }
     
     func deleteDownloaded() throws {
@@ -54,29 +49,9 @@ struct DefaultBookDownloader: BookDownloader {
 }
 
 extension DefaultBookDownloader {
-    private static func downloadSecret(downloader: Downloader, provider: Provider) throws -> String {
-        let url = "https://\(provider.domain)/reader/p/api/v5/metadata_secret?lang=ru"
-        let data = try downloader.requestURL(url)
-        
-        guard
-            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let secret = json["secret"] as? String
-        else {
-            throw NSError(
-                domain: "JSONError",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to parse secret response"]
-            )
-        }
-        
-        print("Secret: \(secret)")
-        
-        return secret
-    }
-    
-    private func downloadMetadata(_ bookid: String) throws -> [String: Any] {
+    private func downloadMetadata(_ bookid: String) async throws -> [String: Any] {
         let url = "https://\(provider.domain)/p/api/v5/books/\(bookid)/metadata/v4"
-        let data = try downloader.requestURL(url)
+        let data = try await downloader.requestURL(url)
         
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw NSError(
@@ -159,7 +134,7 @@ extension DefaultBookDownloader {
         return decryptedData.prefix(numBytesDecrypted)
     }
     
-    private func processMetadata(_ metadata: [String: Any]) throws {
+    private func processMetadata(_ metadata: [String: Any]) async throws {
         guard let containerData = metadata["container"] as? Data,
               let opfData = metadata["opf"] as? Data,
               let ncxData = metadata["ncx"] as? Data,
@@ -175,11 +150,11 @@ extension DefaultBookDownloader {
         try downloader.saveBytes(Data("application/epub+zip".utf8), name: "mimetype")
         try downloader.saveBytes(containerData, name: "META-INF/container.xml")
         try downloader.saveBytes(opfData, name: "OEBPS/content.opf")
-        try processOPF(documentUUID)
+        try await processOPF(documentUUID)
         try downloader.saveBytes(ncxData, name: "OEBPS/toc.ncx")
     }
     
-    private func processOPF(_ uuid: String) throws {
+    private func processOPF(_ uuid: String) async throws {
         let contentFile = downloader.outdir.appendingPathComponent("OEBPS/content.opf")
         let contentData = try Data(contentsOf: contentFile)
         
@@ -211,7 +186,7 @@ extension DefaultBookDownloader {
                         let url = "https://\(provider.domain)/p/a/4/d/\(uuid)/contents/OEBPS/\(href)"
                         
                         do {
-                            let data = try downloader.requestURL(url)
+                            let data = try await downloader.requestURL(url)
                             
                             try downloader.saveBytes(data, name: "OEBPS/\(href)")
                             

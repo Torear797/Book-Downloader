@@ -6,7 +6,7 @@ import PackageDescription
 let package = Package(
     name: "BookDownloader",
     platforms: [
-        .macOS(.v13), .iOS(.v12), .tvOS(.v12), .watchOS(.v4), .visionOS(.v1)
+        .macOS(.v13), .iOS(.v16), .tvOS(.v15), .watchOS(.v4), .visionOS(.v1)
     ],
     dependencies: [
         .package(url: "https://github.com/weichsel/ZIPFoundation.git", .upToNextMajor(from: "0.9.0"))
@@ -17,7 +17,7 @@ let package = Package(
             dependencies: [
                 .byName(name: "ZIPFoundation")
             ],
-            path: "Book Downloader"
+            path: "Book Downloader/Sources"
         ),
     ]
 )

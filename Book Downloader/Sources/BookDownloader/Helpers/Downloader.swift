@@ -25,7 +25,7 @@ struct Downloader {
         try data.write(to: fileURL)
     }
     
-    func requestURL(_ urlString: String) throws -> Data {
+    func requestURL(_ urlString: String) async throws -> Data {
         print("Downloading \(urlString)...")
         
         guard let url = URL(string: urlString) else {
@@ -42,39 +42,18 @@ struct Downloader {
         let cookieHeader = HTTPCookie.requestHeaderFields(with: cookies)
         request.allHTTPHeaderFields = cookieHeader
         
-        let semaphore = DispatchSemaphore(value: 0)
+        let (data, response) = try await URLSession.shared.data(for: request)
         
-        var responseData: Data?
-        var responseError: Error?
-        
-        let task = URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error {
-                responseError = error
-            } else if let httpResponse = response as? HTTPURLResponse {
-                if httpResponse.statusCode == 200, let data {
-                    responseData = data
-                } else {
-                    responseError = NSError(
-                        domain: "HTTPError",
-                        code: httpResponse.statusCode,
-                        userInfo: [NSLocalizedDescriptionKey: "HTTP Status: \(httpResponse.statusCode)"]
-                    )
-                }
-            }
-            
-            semaphore.signal()
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NSError(domain: "Invalid Response", code: -1)
         }
         
-        task.resume()
-        
-        semaphore.wait()
-        
-        if let error = responseError {
-            throw error
-        }
-        
-        guard let data = responseData else {
-            throw NSError(domain: "NoData", code: 0, userInfo: [NSLocalizedDescriptionKey: "No data received"])
+        guard httpResponse.statusCode == 200 else {
+            throw NSError(
+                domain: "HTTPError",
+                code: httpResponse.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "HTTP Status: \(httpResponse.statusCode)"]
+            )
         }
 
         return data
