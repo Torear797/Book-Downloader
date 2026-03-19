@@ -4,6 +4,8 @@
 
 ## User settings
 xcuserdata/
+*.resolved
+.swiftpm
 .DS_Store
 
 ## Obj-C/Swift specific
