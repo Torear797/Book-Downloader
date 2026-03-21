@@ -55,7 +55,7 @@ struct Downloader {
                 userInfo: [NSLocalizedDescriptionKey: "HTTP Status: \(httpResponse.statusCode)"]
             )
         }
-
+        
         return data
     }
     
@@ -75,20 +75,81 @@ struct Downloader {
     
     func makeEPUB() throws -> URL {
         let epubURL = outdir.appendingPathExtension("epub")
+        
+        try ensureEPUBStructure()
+        
         let archive = try Archive(url: epubURL, accessMode: .create)
         let fileManager = FileManager.default
-        let enumerator = fileManager.enumerator(at: outdir, includingPropertiesForKeys: nil)
+        let filesToAdd = [
+            outdir.appendingPathComponent("mimetype"),
+            outdir.appendingPathComponent("META-INF/container.xml"),
+            outdir.appendingPathComponent("OEBPS/content.opf"),
+            outdir.appendingPathComponent("OEBPS/toc.ncx")
+        ]
         
-        while let fileURL = enumerator?.nextObject() as? URL {
-            let relativePath = fileURL.relativePath.replacingOccurrences(of: outdir.path + "/", with: "")
+        for fileURL in filesToAdd {
+            if fileManager.fileExists(atPath: fileURL.path) {
+                let relativePath = fileURL.relativePath.replacingOccurrences(of: outdir.path + "/", with: "")
+                if relativePath == "mimetype" {
+                    try archive.addEntry(with: relativePath, fileURL: fileURL, compressionMethod: .none)
+                } else {
+                    try archive.addEntry(with: relativePath, fileURL: fileURL, compressionMethod: .deflate)
+                }
+            }
+        }
+        
+        let oebpsURL = outdir.appendingPathComponent("OEBPS")
+        
+        if fileManager.fileExists(atPath: oebpsURL.path) {
+            let enumerator = fileManager.enumerator(
+                at: oebpsURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            )
             
-            if relativePath == "mimetype" {
-                try archive.addEntry(with: relativePath, fileURL: fileURL, compressionMethod: .none)
-            } else {
-                try archive.addEntry(with: relativePath, fileURL: fileURL, compressionMethod: .deflate)
+            while let fileURL = enumerator?.nextObject() as? URL {
+                let resourceValues = try fileURL.resourceValues(forKeys: [.isDirectoryKey])
+                if resourceValues.isDirectory == true { continue }
+                
+                if fileURL.lastPathComponent != "content.opf" && fileURL.lastPathComponent != "toc.ncx" {
+                    let relativePath = fileURL.relativePath.replacingOccurrences(of: outdir.path + "/", with: "")
+                    try archive.addEntry(with: relativePath, fileURL: fileURL, compressionMethod: .deflate)
+                }
             }
         }
         
         return epubURL
+    }
+    
+    private func ensureEPUBStructure() throws {
+        try FileManager.default.createDirectory(
+            at: outdir.appendingPathComponent("META-INF"),
+            withIntermediateDirectories: true
+        )
+        
+        try FileManager.default.createDirectory(
+            at: outdir.appendingPathComponent("OEBPS"),
+            withIntermediateDirectories: true
+        )
+        
+        let mimetypeURL = outdir.appendingPathComponent("mimetype")
+        
+        if !FileManager.default.fileExists(atPath: mimetypeURL.path) {
+            try "application/epub+zip".write(to: mimetypeURL, atomically: true, encoding: .ascii)
+        }
+        
+        let containerURL = outdir.appendingPathComponent("META-INF/container.xml")
+        
+        if !FileManager.default.fileExists(atPath: containerURL.path) {
+            let containerContent = """
+           <?xml version="1.0" encoding="UTF-8"?>
+           <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+               <rootfiles>
+                   <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+               </rootfiles>
+           </container>
+           """
+            try containerContent.write(to: containerURL, atomically: true, encoding: .utf8)
+        }
     }
 }
