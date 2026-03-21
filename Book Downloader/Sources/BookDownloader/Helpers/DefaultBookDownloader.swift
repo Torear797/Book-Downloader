@@ -27,7 +27,7 @@ struct DefaultBookDownloader: IBookDownloader {
         self.provider = provider
         self.secret = secret
     }
-
+    
     func download() async throws {
         let encryptedMetadata = try await downloadMetadata(bookid)
         let metadata = try decryptMetadata(encryptedMetadata, secret: secret)
@@ -73,7 +73,6 @@ extension DefaultBookDownloader {
                 let decryptedData = try decrypt(secret, data: data)
                 
                 metadata[key] = decryptedData
-                
             } else {
                 metadata[key] = value
             }
@@ -81,7 +80,7 @@ extension DefaultBookDownloader {
         
         return metadata
     }
-
+    
     private func decrypt(_ secret: String, data: Data) throws -> Data {
         guard let keyData = Data(base64Encoded: secret) else {
             throw NSError(
@@ -138,6 +137,7 @@ extension DefaultBookDownloader {
         guard let containerData = metadata["container"] as? Data,
               let opfData = metadata["opf"] as? Data,
               let ncxData = metadata["ncx"] as? Data,
+              let cover = makeCover(),
               let documentUUID = metadata["document_uuid"] as? String else {
             
             throw NSError(
@@ -148,10 +148,37 @@ extension DefaultBookDownloader {
         }
         
         try downloader.saveBytes(Data("application/epub+zip".utf8), name: "mimetype")
-        try downloader.saveBytes(containerData, name: "META-INF/container.xml")
-        try downloader.saveBytes(opfData, name: "OEBPS/content.opf")
+        
+        try downloader.saveBytes(clearTrash(containerData, trash: .meta), name: "META-INF/container.xml")
+        try downloader.saveBytes(cover, name: "OEBPS/cover.xhtml")
+        try downloader.saveBytes(clearTrash(opfData, trash: .content), name: "OEBPS/content.opf")
         try await processOPF(documentUUID)
-        try downloader.saveBytes(ncxData, name: "OEBPS/toc.ncx")
+        try downloader.saveBytes(clearTrash(ncxData, trash: .toc), name: "OEBPS/toc.ncx")
+    }
+    
+    private func clearTrash(_ data: Data, trash: TrashProvider) -> Data {
+        guard let trashString: String = String(data: data, encoding: .utf8) else {
+            return data
+        }
+        
+        var clearString: String = trashString
+        
+        switch trash {
+        case .meta:
+            clearString = clearString.replacingOccurrences(of: "</c", with: "</container>")
+        case .content:
+            if trashString.last == "<" {
+                clearString.append("/package>")
+            } else {
+                clearString = trashString
+            }
+            clearString = fixContentOf(clearString)
+        case .toc:
+            clearString.append("p>")
+            clearString.append("</ncx>")
+        }
+        
+        return clearString.data(using: .utf8) ?? data
     }
     
     private func processOPF(_ uuid: String) async throws {
@@ -187,8 +214,16 @@ extension DefaultBookDownloader {
                         
                         do {
                             let data = try await downloader.requestURL(url)
+                            let fixedData: Data
                             
-                            try downloader.saveBytes(data, name: "OEBPS/\(href)")
+                            if let stringData = String(data: data, encoding: .utf8) {
+                                let fixedString = fixHTML(stringData)
+                                fixedData = fixedString.data(using: .utf8) ?? data
+                            } else {
+                                fixedData = data
+                            }
+                            
+                            try downloader.saveBytes(fixedData, name: "OEBPS/\(href)")
                             
                             print("Successfully downloaded: \(href)")
                         } catch {
@@ -198,5 +233,109 @@ extension DefaultBookDownloader {
                 }
             }
         }
+    }
+    
+    private func fixHTML(_ html: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: "<(link|meta|img|br)([^>]*)>") else {
+            return html
+        }
+        
+        let range = NSRange(location: 0, length: html.utf16.count)
+        
+        var result: String = regex.stringByReplacingMatches(
+            in: html,
+            range: range,
+            withTemplate: "<$1$2 />"
+        )
+        
+        let newDocType = """
+        <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+        """
+        
+        result = result.replacingOccurrences(
+            of: "<!DOCTYPE html>",
+            with: newDocType
+        )
+        
+        let newHTML = """
+        <html xmlns="http://www.w3.org/1999/xhtml">
+        """
+        result = result.replacingOccurrences(of: "<html>", with: newHTML)
+        
+        return result
+    }
+    
+    private func fixContentOf(_ content: String) -> String {
+        var result: String = content
+        
+        let pattern = "<item id=\"(?!ncxtoc\"|cover_image|css1\")([^\"]*)\" href"
+        let regex = try? NSRegularExpression(pattern: pattern)
+        let range = NSRange(location: 0, length: result.utf16.count)
+        
+        result = regex?.stringByReplacingMatches(
+            in: result,
+            range: range,
+            withTemplate: "<item id =\"id_$1\" href"
+        ) ?? result
+        
+        let patternRef = "<itemref idref=\"([^>]*)/>"
+        let regexRef = try? NSRegularExpression(pattern: patternRef)
+        let rangeRef = NSRange(location: 0, length: result.utf16.count)
+        
+        result = regexRef?.stringByReplacingMatches(
+            in: result,
+            range: rangeRef,
+            withTemplate: "<itemref idref=\"id_$1/>"
+        ) ?? result
+        
+        let coverPattern = """
+        <item id="cover_image" href="cover.jpg" media-type="image/jpeg"/>
+        """
+        
+        let newCoverPattern = """
+        <item id="cover_image" href="cover.jpg" media-type="image/jpeg"/>\n
+        <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>
+        """
+        
+        result = result.replacingOccurrences(of: coverPattern, with: newCoverPattern)
+        
+        
+        let coverRefPattern = """
+        <reference href="cover.jpg" type="cover" title="Cover"/>
+        """
+        
+        let newCoverRefPattern = """
+        <reference href="cover.xhtml" type="cover" title="Cover"/>
+        """
+        
+        result = result.replacingOccurrences(of: coverRefPattern, with: newCoverRefPattern)
+        
+        return result
+    }
+    
+    private func makeCover() -> Data? {
+        let html: String = """
+         <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+         <html xmlns="http://www.w3.org/1999/xhtml">
+         <head>
+            <title>Cover</title>
+         </head>
+         <body>
+            <div style="text-align: center; padding: 0; margin: 0;">
+                <img src="cover.jpg" alt="Cover Image" style="height: 100%; max-width: 100%;"/>
+            </div>
+         </body>
+         </html>
+        """
+        
+        return html.data(using: .utf8)
+    }
+}
+
+extension DefaultBookDownloader {
+    enum TrashProvider {
+        case meta
+        case content
+        case toc
     }
 }
